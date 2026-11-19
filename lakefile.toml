@@ -1,15 +1,17 @@
-name = "leantls-workspace"
-version = "0.1.0"
-defaultTargets = ["All"]
-
-# Workspace root: `lake build` here checks every proof and spec in both packages.
-[[require]]
 name = "leantls"
-path = "leantls"
+version = "0.1.0"
+defaultTargets = ["LeanTLS", "LeanBrowse"]
 
-[[require]]
-name = "leanbrowse"
-path = "leanbrowse"
+# The root package owns both libraries, so `lake build` here checks every proof and spec,
+# and tools that atomize the root package (VeriLib's probe-lean) see all modules.
+# `leantls/` and `leanbrowse/` also build standalone with their own lakefiles (and executables).
 
 [[lean_lib]]
-name = "All"
+name = "LeanTLS"
+srcDir = "leantls"
+globs = ["LeanTLS", "LeanTLS.+"]
+
+[[lean_lib]]
+name = "LeanBrowse"
+srcDir = "leanbrowse"
+globs = ["LeanBrowse", "LeanBrowse.+"]

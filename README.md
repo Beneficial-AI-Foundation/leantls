@@ -64,7 +64,7 @@ the 3 GB build box, or work with `String`s, which the kernel does not reduce.
 Requires [elan](https://github.com/leanprover/elan); the toolchain is pinned to Lean 4.36.0.
 
 ```sh
-lake build                         # at the root: checks every proof and spec in both packages
+lake build                         # at the root: checks every proof and spec (root package owns both libraries)
 cd leanbrowse && lake build        # builds the lbrowse binary
 .lake/build/bin/lbrowse https://example.com      # interactive: <n> follows a link, b goes back, q quits
 .lake/build/bin/lbrowse --dump https://news.ycombinator.com
