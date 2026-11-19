@@ -4,8 +4,6 @@ import LeanTLS.SHA256
 -/
 namespace LeanTLS
 
-def mapBytes (f : UInt8 → UInt8) (b : ByteArray) : ByteArray := ⟨b.data.map f⟩
-
 def hmac (key msg : ByteArray) : ByteArray :=
   let k := if key.size > 64 then SHA256.hash key else key
   let k := k ++ zeros (64 - k.size)

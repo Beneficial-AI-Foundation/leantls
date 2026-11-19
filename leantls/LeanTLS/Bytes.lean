@@ -127,6 +127,8 @@ def ofHex (s : String) : ByteArray :=
     | _, acc => acc
   ⟨go ds #[]⟩
 
+def mapBytes (f : UInt8 → UInt8) (b : ByteArray) : ByteArray := ⟨b.data.map f⟩
+
 def ofString (s : String) : ByteArray := s.toUTF8
 
 end LeanTLS

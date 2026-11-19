@@ -70,6 +70,15 @@ def responseComplete (raw : ByteArray) : Bool :=
 structure Transport where
   tls : Bool
   certCount : Nat := 0
+  verified : Bool := false
+  group : String := ""
+  /-- Leaf certificate subject names, when verified. -/
+  names : List String := []
+
+/-- How to make TLS connections: roots to trust, or `insecure` to skip certificate checks. -/
+structure TlsConfig where
+  trust : Option LeanTLS.TrustStore := none
+  insecure : Bool := false
 
 partial def recvAll (sock : Std.Async.TCP.Socket.Client) (acc : ByteArray := .empty) : IO ByteArray := do
   match ← (sock.recv? 65536).block with
@@ -91,14 +100,15 @@ def requestBytes (u : Url) : ByteArray :=
      Accept: text/html,text/plain;q=0.9,*/*;q=0.5\r\nAccept-Encoding: identity\r\n\
      Connection: close\r\n\r\n".toUTF8
 
-def fetchOnce (u : Url) : IO (Response × Transport) := do
+def fetchOnce (cfg : TlsConfig) (u : Url) : IO (Response × Transport) := do
   if u.scheme == "https" then
-    let c ← LeanTLS.connect u.host u.port.toUInt16
+    let c ← LeanTLS.connect u.host u.port.toUInt16 cfg.trust cfg.insecure
     c.write (requestBytes u)
     let raw ← tlsReadResponse c
     c.close
     match parseResponse raw with
-    | .ok r => return (r, { tls := true, certCount := c.peerCerts.length })
+    | .ok r => return (r, { tls := true, certCount := c.peerCerts.length, verified := c.verified,
+                            group := c.group, names := (c.leaf.map (·.dnsNames)).getD [] })
     | .error e => throw <| IO.userError e
   else
     let sock ← LeanTLS.tcpConnect u.host u.port.toUInt16
@@ -109,10 +119,10 @@ def fetchOnce (u : Url) : IO (Response × Transport) := do
     | .error e => throw <| IO.userError e
 
 /-- GET with redirects. Returns the final URL. -/
-def fetch (u : Url) (maxRedirects : Nat := 8) : IO (Url × Response × Transport) := do
+def fetch (cfg : TlsConfig) (u : Url) (maxRedirects : Nat := 8) : IO (Url × Response × Transport) := do
   let mut u := u
   for _ in [0:maxRedirects + 1] do
-    let (r, t) ← fetchOnce u
+    let (r, t) ← fetchOnce cfg u
     if r.status ∈ [301, 302, 303, 307, 308] then
       match (r.header? "location").bind (resolve u) with
       | some u' => u := u'; continue

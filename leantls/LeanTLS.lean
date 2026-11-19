@@ -11,3 +11,10 @@ import LeanTLS.Spec.Kernel
 import LeanTLS.Spec.Native
 import LeanTLS.Spec.RFC8448
 import LeanTLS.Client
+import LeanTLS.SHA512
+import LeanTLS.ASN1
+import LeanTLS.RSA
+import LeanTLS.EC
+import LeanTLS.X509
+import LeanTLS.Spec.Signatures
+import LeanTLS.Spec.X509

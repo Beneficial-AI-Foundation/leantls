@@ -2,15 +2,18 @@ import Std.Async
 import LeanTLS.Messages
 import LeanTLS.KeySchedule
 import LeanTLS.X25519
+import LeanTLS.X509
+import Std.Time
 /-!
 # TLS 1.3 client connection (IO)
 
 A thin IO shell around the verified pure core: every byte that is framed, encrypted,
 decrypted, parsed or derived goes through `Record`, `AEAD`, `KeySchedule` and `Messages`.
 
-**Security status:** the server's certificate chain and CertificateVerify signature are
-*not* validated yet. The handshake is authenticated against the transcript (both Finished
-MACs are checked), but an active man-in-the-middle can impersonate the server.
+**Authentication:** the server's chain is validated against the system roots
+(`X509.validate`: signatures, validity, CA constraints, hostname), its CertificateVerify
+signature is checked with the leaf key, and both Finished MACs are checked. `insecure := true`
+skips the certificate checks (for testing only). Revocation is not checked.
 -/
 namespace LeanTLS
 open Std.Async Std.Net TLS13 Record
@@ -30,8 +33,13 @@ structure Conn where
   rd : IO.Ref Dir
   wr : IO.Ref Dir
   closed : IO.Ref Bool
-  /-- DER certificates the server presented (leaf first). NOT validated. -/
+  /-- DER certificates the server presented (leaf first). -/
   peerCerts : List ByteArray
+  /-- Chain validated against the trust store, hostname matched, CertificateVerify checked. -/
+  verified : Bool
+  leaf : Option X509.Cert
+  /-- Key-exchange group used. -/
+  group : String
 
 def alertName : Nat → String
   | 0 => "close_notify" | 10 => "unexpected_message" | 20 => "bad_record_mac"
@@ -76,43 +84,96 @@ def tcpConnect (host : String) (port : UInt16) : IO TCP.Socket.Client := do
   (sock.connect sa).block
   return sock
 
-/-- Open a TLS 1.3 connection to `host:port`. -/
-def connect (host : String) (port : UInt16 := 443) : IO Conn := do
+/-- System root certificates. -/
+structure TrustStore where
+  roots : List X509.Cert
+
+/-- Load roots from `$SSL_CERT_FILE` or the usual system bundle locations. -/
+def TrustStore.load : IO TrustStore := do
+  let candidates := ((← IO.getEnv "SSL_CERT_FILE").toList) ++
+    ["/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt",
+     "/etc/ssl/ca-bundle.pem", "/usr/local/etc/openssl/cert.pem", "/opt/homebrew/etc/openssl@3/cert.pem"]
+  for f in candidates do
+    if ← System.FilePath.pathExists f then
+      let roots := (X509.pemCerts (← IO.FS.readFile f)).filterMap (fun d => (X509.parse d).toOption)
+      unless roots.isEmpty do return { roots }
+  throw <| IO.userError "TLS: no system root certificates found (set SSL_CERT_FILE)"
+
+def unixNow : IO Int := return (← Std.Time.Timestamp.now).toSecondsSinceUnixEpoch.val
+
+/-- Read plaintext handshake records until one complete message is buffered. -/
+partial def readPlainHs (sock : TCP.Socket.Client) (rbuf : IO.Ref ByteArray) (hs : ByteArray) :
+    IO (Nat × ByteArray × ByteArray) := do
+  match parseHs hs with
+  | some m => return m
+  | none =>
+    match ← readRecord sock rbuf with
+    | none => tlsError "connection closed during handshake"
+    | some (22, _, b) => readPlainHs sock rbuf (hs ++ b)
+    | some (21, _, b) => tlsError s!"server alert: {alertName (rd8 b 1)}"
+    | some (20, _, _) => readPlainHs sock rbuf hs
+    | some (t, _, _) => tlsError s!"unexpected record type {t} before ServerHello"
+
+/-- An ephemeral key for one group: `(group, public share, shared-secret function)`. -/
+def mkShare (group : Nat) : IO (Nat × ByteArray × (ByteArray → Option ByteArray)) := do
+  let rnd ← IO.getRandomBytes 32
+  if group == GROUP_X25519 then
+    return (group, X25519.publicKey rnd, fun peer =>
+      if peer.size != 32 then none else
+      let z := X25519.x25519 rnd peer
+      if z == zeros 32 then none else some z)
+  else if group == GROUP_SECP256R1 then
+    let (d, pub) := EC.p256Keygen rnd
+    return (group, pub, EC.p256Shared d)
+  else tlsError s!"server selected unsupported group 0x{String.ofList (Nat.toDigits 16 group)}"
+
+/-- Open a TLS 1.3 connection to `host:port`.
+    The server must present a certificate chain that `X509.validate` accepts against `trust`
+    (system roots by default) and a valid CertificateVerify signature, unless `insecure`. -/
+def connect (host : String) (port : UInt16 := 443) (trust : Option TrustStore := none)
+    (insecure : Bool := false) : IO Conn := do
+  let store ← if insecure then pure { roots := [] } else match trust with
+    | some t => pure t
+    | none => TrustStore.load
   let sock ← tcpConnect host port
   let rbuf ← IO.mkRef ByteArray.empty
-  -- ClientHello
-  let sk ← IO.getRandomBytes 32
   let random ← IO.getRandomBytes 32
   let sid ← IO.getRandomBytes 32
-  let ch := clientHello random sid (X25519.publicKey sk) host
+  -- ClientHello 1 (X25519 share; P-256 also advertised)
+  let mut (group, pub, sharedOf) ← mkShare GROUP_X25519
+  let mut ch := clientHello random sid (group, pub) host
   sendRaw sock (u8 22 ++ be16 0x0301 ++ be16 ch.size ++ ch)
-  -- ServerHello (plaintext)
-  let mut hs := ByteArray.empty
-  let mut shOpt : Option (ByteArray × ByteArray) := none
-  while shOpt.isNone do
-    match parseHs hs with
-    | some (ty, body, rest) =>
-      if ty != 2 then tlsError s!"expected ServerHello, got handshake type {ty}"
-      shOpt := some (body, rest)
-    | none =>
-      match ← readRecord sock rbuf with
-      | none => tlsError "connection closed during handshake"
-      | some (22, _, b) => hs := hs ++ b
-      | some (21, _, b) => tlsError s!"server alert: {alertName (rd8 b 1)}"
-      | some (20, _, _) => pure ()
-      | some (t, _, _) => tlsError s!"unexpected record type {t} before ServerHello"
-  let some (shBody, leftover) := shOpt | tlsError "unreachable"
-  let sh ← match Parser.run parseServerHello shBody with
+  let mut transcript := ch
+  let (ty, body, rest) ← readPlainHs sock rbuf ByteArray.empty
+  if ty != 2 then tlsError s!"expected ServerHello, got handshake type {ty}"
+  let mut sh ← match Parser.run parseServerHello body with
     | .ok sh => pure sh
     | .error e => tlsError s!"bad ServerHello: {e}"
-  if sh.isHRR then tlsError "server sent HelloRetryRequest (only X25519 is offered)"
+  let mut shBody := body
+  let mut leftover := rest
+  -- HelloRetryRequest: one retry with the group the server asked for
+  if sh.isHRR then
+    if sh.keyShareGroup == group then tlsError "HelloRetryRequest for a group we already sent"
+    let (g, p, f) ← mkShare sh.keyShareGroup
+    group := g; pub := p; sharedOf := f
+    transcript := messageHash ch ++ hsMsg 2 body
+    ch := clientHello random sid (group, pub) host sh.cookie
+    sendRaw sock (ofHex "140303000101")   -- middlebox-compat CCS
+    sendRaw sock (u8 22 ++ be16 0x0303 ++ be16 ch.size ++ ch)
+    transcript := transcript ++ ch
+    let (ty2, body2, rest2) ← readPlainHs sock rbuf leftover
+    if ty2 != 2 then tlsError s!"expected ServerHello, got handshake type {ty2}"
+    sh ← match Parser.run parseServerHello body2 with
+      | .ok sh2 => pure sh2
+      | .error e => tlsError s!"bad ServerHello: {e}"
+    if sh.isHRR then tlsError "second HelloRetryRequest"
+    shBody := body2; leftover := rest2
   if sh.version != 0x0304 then tlsError "server did not negotiate TLS 1.3"
   if sh.cipherSuite != TLS_CHACHA20_POLY1305_SHA256 then
     tlsError s!"server chose unsupported cipher suite 0x{String.ofList (Nat.toDigits 16 sh.cipherSuite)}"
-  if sh.keyShareGroup != GROUP_X25519 || sh.keyShare.size != 32 then tlsError "bad key_share"
-  let shared := X25519.x25519 sk sh.keyShare
-  if shared == zeros 32 then tlsError "X25519 produced the all-zero value"
-  let mut transcript := ch ++ hsMsg 2 shBody
+  if sh.keyShareGroup != group then tlsError "server key_share group mismatch"
+  let some shared := sharedOf sh.keyShare | tlsError "invalid server key share"
+  transcript := transcript ++ hsMsg 2 shBody
   let secrets := handshakeSecrets shared transcript
   let sKeys := trafficKeys secrets.serverHs
   let cKeys := trafficKeys secrets.clientHs
@@ -120,6 +181,8 @@ def connect (host : String) (port : UInt16 := 443) : IO Conn := do
   let mut buf := leftover
   let mut seq := 0
   let mut certs : List ByteArray := []
+  let mut leaf : Option X509.Cert := none
+  let mut cvOk := false
   let mut done := false
   while !done do
     match parseHs buf with
@@ -130,9 +193,22 @@ def connect (host : String) (port : UInt16 := 443) : IO Conn := do
       | 8 => transcript := transcript ++ msg
       | 11 =>
         certs := (Parser.run parseCertificate body).toOption.getD []
+        unless insecure do
+          match X509.validate store.roots certs host (← unixNow) with
+          | .ok l => leaf := some l
+          | .error e => tlsError s!"certificate verify failed: {e}"
         transcript := transcript ++ msg
-      | 15 => transcript := transcript ++ msg   -- CertificateVerify: signature NOT checked yet
+      | 15 =>
+        unless insecure do
+          let some l := leaf | tlsError "CertificateVerify without a validated certificate"
+          let some (scheme, sig) := (Parser.run parseCertVerify body).toOption
+            | tlsError "malformed CertificateVerify"
+          unless X509.verifyCertificateVerify l.key scheme sig (SHA256.hash transcript) do
+            tlsError s!"CertificateVerify signature invalid (scheme 0x{String.ofList (Nat.toDigits 16 scheme)})"
+          cvOk := true
+        transcript := transcript ++ msg
       | 20 =>
+        unless insecure || cvOk do tlsError "server did not prove possession of its key"
         if !ctEq body (finishedVerify secrets.serverHs transcript) then
           tlsError "server Finished MAC mismatch"
         transcript := transcript ++ msg
@@ -153,7 +229,7 @@ def connect (host : String) (port : UInt16 := 443) : IO Conn := do
           else if ity == 21 then tlsError s!"server alert: {alertName (rd8 content 1)}"
           else tlsError s!"unexpected inner type {ity} during handshake"
       | some (t, _, _) => tlsError s!"unexpected record type {t}"
-  -- Client: middlebox-compat CCS, then Finished
+  -- Client: middlebox-compat CCS (unless already sent), then Finished
   sendRaw sock (ofHex "140303000101")
   let cfin := hsMsg 20 (finishedVerify secrets.clientHs transcript)
   sendRaw sock (sealRecord cKeys.key cKeys.iv 0 22 cfin)
@@ -164,7 +240,10 @@ def connect (host : String) (port : UInt16 := 443) : IO Conn := do
     rd := ← IO.mkRef (Dir.ofSecret sAp)
     wr := ← IO.mkRef (Dir.ofSecret cAp)
     closed := ← IO.mkRef false
-    peerCerts := certs }
+    peerCerts := certs
+    verified := !insecure
+    leaf
+    group := if group == GROUP_X25519 then "X25519" else "P-256" }
 
 namespace Conn
 
