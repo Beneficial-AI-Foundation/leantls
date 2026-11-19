@@ -1,0 +1,16 @@
+name = "leanbrowse"
+version = "0.1.0"
+defaultTargets = ["LeanBrowse", "lbrowse"]
+
+[[require]]
+name = "leantls"
+path = "../leantls"
+
+[[lean_lib]]
+name = "LeanBrowse"
+# LeanBrowse.Spec.* hold the specs — checked on every build
+globs = ["LeanBrowse", "LeanBrowse.+"]
+
+[[lean_exe]]
+name = "lbrowse"
+root = "Main"

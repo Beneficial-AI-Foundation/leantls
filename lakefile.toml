@@ -1,0 +1,15 @@
+name = "leantls-workspace"
+version = "0.1.0"
+defaultTargets = ["All"]
+
+# Workspace root: `lake build` here checks every proof and spec in both packages.
+[[require]]
+name = "leantls"
+path = "leantls"
+
+[[require]]
+name = "leanbrowse"
+path = "leanbrowse"
+
+[[lean_lib]]
+name = "All"
