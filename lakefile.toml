@@ -1,6 +1,9 @@
 name = "leantls"
 version = "0.2.0"
-defaultTargets = ["LeanTLS", "LeanBrowse", "tlsget", "lbrowse"]
+# Libraries only: tools that analyse the default targets (VeriLib's probe-lean) load them into one
+# environment, and the two executables both define `main`. Build binaries with
+# `lake build tlsget lbrowse`.
+defaultTargets = ["LeanTLS", "LeanBrowse"]
 
 # Two libraries in one package: LeanTLS (the TLS 1.3 library) and LeanBrowse (the browser,
 # which uses only LeanTLS's public API). `lake build` checks every proof and spec in both.

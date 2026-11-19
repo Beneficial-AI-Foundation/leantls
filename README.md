@@ -28,11 +28,12 @@ ships with Lean.
 curl https://elan.lean-lang.org/elan-init.sh -sSf | sh     # if you don't have elan yet
 git clone https://github.com/Beneficial-AI-Foundation/leantls
 cd leantls
-lake build                     # checks every proof and spec, then builds both binaries (a few minutes)
+lake build                     # checks every proof and spec (a few minutes)
+lake build tlsget lbrowse      # builds the two binaries
 mkdir -p ~/.local/bin && cp .lake/build/bin/lbrowse .lake/build/bin/tlsget ~/.local/bin/   # ~/.local/bin must be on PATH
 ```
 
-`lake build` fails if any proof or spec fails, so a successful build means every theorem in
+The first `lake build` fails if any proof or spec fails, so a successful build means every theorem in
 [What's proved](#whats-proved) was checked on your machine.
 
 ### Root certificates
