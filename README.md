@@ -1,7 +1,8 @@
 # LeanTLS + LeanBrowse
 
-A TLS 1.3 client library written from scratch in Lean 4 (`LeanTLS`) and a small terminal web
-browser built on it (`LeanBrowse`). Both compile to native code through C. Tests are written as
+A TLS 1.3 client and server library written from scratch in Lean 4 (`LeanTLS`) and a small
+terminal web browser built on it (`LeanBrowse`). The server side powers HTTPS in
+[leannginx](https://github.com/Beneficial-AI-Foundation/leannginx). Both compile to native code through C. Tests are written as
 **specs**: Lean theorems that `lake build` checks. There is no separate runtime test suite.
 
 > ⚠ **Research code, not production TLS.** It validates certificate chains against your system's
@@ -12,6 +13,7 @@ browser built on it (`LeanBrowse`). Both compile to native code through C. Tests
 - [Use the browser: `lbrowse`](#use-the-browser-lbrowse)
 - [Use the HTTPS fetcher: `tlsget`](#use-the-https-fetcher-tlsget)
 - [Use LeanTLS as a library](#use-leantls-as-a-library)
+- [Use LeanTLS as a server](#use-leantls-as-a-server)
 - [What's implemented](#whats-implemented)
 - [What's proved](#whats-proved)
 - [Not done yet](#not-done-yet)
@@ -117,6 +119,34 @@ signature is invalid. The pure building blocks can also be used on their own: `S
 `SHA512.hash384`, `hmac`, `HKDF`, `AEAD.sealMsg`/`openMsg`, `X25519.x25519`, `RSA.verifyPss`,
 `EC.verifyDer`, `X509.parse` and `X509.validate`.
 
+## Use LeanTLS as a server
+
+`LeanTLS.Server.accept` runs the server handshake over any byte stream (a `Transport` with
+`recv`/`send`), so the caller keeps control of sockets and timeouts:
+
+```lean
+import LeanTLS.Server
+open LeanTLS Server
+
+-- once, at startup
+let ident ← IO.ofExcept (Identity.ofPem (← IO.FS.readFile "cert.pem") (← IO.FS.readFile "key.pem"))
+-- per connection, inside `Async`
+let t : Transport := { recv := myRecvWithTimeout, send := sock.send }
+match ← accept t (fun _sni => some ident) 60000 with
+| .tls c => do
+  let req ← c.read 60000          -- `none` = timeout, `some none` = closed
+  c.write "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi".toUTF8
+  c.close
+| .plain bytes => ...             -- the peer sent something that is not TLS (e.g. plain HTTP)
+| .failed reason => ...
+```
+
+Certificates: ECDSA P-256 keys (signed with `ecdsa_secp256r1_sha256`, deterministic RFC 6979
+nonces) or RSA keys (`rsa_pss_rsae_sha256`), from PEM (`PRIVATE KEY`, `EC PRIVATE KEY`,
+`RSA PRIVATE KEY`; not encrypted). `Identity.ofPem` checks that the key belongs to the leaf
+certificate. The callback receives the SNI name, so different names can get different
+certificates.
+
 ## What's implemented
 
 | Layer | Module | Notes |
@@ -133,6 +163,9 @@ signature is invalid. The pure building blocks can also be used on their own: `S
 | Key schedule | `KeySchedule.lean` | RFC 8446 §7 |
 | Handshake messages | `Messages.lean` | ClientHello, ServerHello, HelloRetryRequest, Certificate, CertificateVerify |
 | Connection (IO) | `Client.lean` | `Std.Async` TCP/DNS, trust store, KeyUpdate, close_notify |
+| Signing, private keys | `Sign.lean` | ECDSA P-256 with RFC 6979 nonces, RSA-PSS, PKCS#8 / SEC1 / PKCS#1 PEM |
+| Server handshake (pure) | `ServerMessages.lean` | ClientHello parsing, negotiation, ServerHello … Finished |
+| Server connection (IO) | `Server.lean` | `Std.Async`, caller-supplied transport, SNI, KeyUpdate, close_notify |
 | URL parsing and resolution | `LeanBrowse/Url.lean` | RFC 3986 §5.2 |
 | Chunked transfer coding | `Chunked.lean` | RFC 9112 §7.1 |
 | HTTP/1.1 client | `Http.lean` | https over LeanTLS, plain http over TCP, redirects |
@@ -149,6 +182,11 @@ HelloRetryRequest. Accepted server signatures:
 Tested against Cloudflare, Google, GitHub, Wikipedia, Hacker News and lean-lang.org (all
 verified). Also tested against `openssl s_server`, with HelloRetryRequest, RSA-PSS, a wrong hostname,
 an expired certificate and an untrusted root (each accepted or rejected as it should be).
+
+The server accepts TLS 1.3 only (a TLS 1.2 client gets `protocol_version`), with ChaCha20-Poly1305
+and an X25519 or P-256 key share; there is no HelloRetryRequest, so a client that sends neither
+share fails. Tested with curl, OpenSSL `s_client` (X25519, P-256, ECDSA and RSA certificates),
+Python's `ssl` and Go's `crypto/tls`.
 
 ## What's proved
 
@@ -189,6 +227,15 @@ These theorems rely only on Lean's standard axioms (`propext`, `Classical.choice
     used across two labels, after expiry, without roots, and with one flipped signature bit.
   - RFC 8448's CertificateVerify verifies.
   - RFC 6125 hostname cases and P-256 key agreement.
+- `LeanTLS/Spec/Server.lean` (kernel-checked):
+  - The RFC 6979 §A.2.5 vector for ECDSA P-256 / SHA-256: the deterministic nonce and the
+    signature `(r, s)`; the DER encoding parses back.
+  - For all ClientHellos (`negotiate_accept`): the server accepts only TLS 1.3, ChaCha20-Poly1305,
+    a signature scheme the client offered, and a key share the client sent with the right size
+    for X25519 or P-256. Without TLS 1.3 on offer the answer is `protocol_version`.
+  - The client's ClientHello parses with the server's parser, and the server's ServerHello with
+    the client's.
+  - For all PEM inputs (`identity_ofPem_matches`): a loaded certificate/key pair belongs together.
 - `LeanBrowse/Spec/Examples.lean`: URL resolution, chunked decoding, HTTP response parsing and
   HTML rendering.
 
@@ -213,4 +260,6 @@ does not evaluate.
 - RSA-PSS and Ed25519 signatures inside certificates.
 - IP-address hosts.
 - Session resumption and client certificates.
+- Server: HelloRetryRequest, `TLS_AES_128_GCM_SHA256`, P-384 and Ed25519 certificate keys,
+  encrypted private keys. Throughput is that of pure-Lean ChaCha20 (a few MB/s).
 - Constant-time field arithmetic.
