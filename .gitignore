@@ -1,4 +1,3 @@
 .lake/
 c/
 build-local/
-*.olean

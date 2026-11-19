@@ -1,17 +1,24 @@
 name = "leantls"
-version = "0.1.0"
-defaultTargets = ["LeanTLS", "LeanBrowse"]
+version = "0.2.0"
+defaultTargets = ["LeanTLS", "LeanBrowse", "tlsget", "lbrowse"]
 
-# The root package owns both libraries, so `lake build` here checks every proof and spec,
-# and tools that atomize the root package (VeriLib's probe-lean) see all modules.
-# `leantls/` and `leanbrowse/` also build standalone with their own lakefiles (and executables).
+# Two libraries in one package: LeanTLS (the TLS 1.3 library) and LeanBrowse (the browser,
+# which uses only LeanTLS's public API). `lake build` checks every proof and spec in both.
 
 [[lean_lib]]
 name = "LeanTLS"
-srcDir = "leantls"
 globs = ["LeanTLS", "LeanTLS.+"]
 
 [[lean_lib]]
 name = "LeanBrowse"
-srcDir = "leanbrowse"
 globs = ["LeanBrowse", "LeanBrowse.+"]
+
+# HTTPS GET over LeanTLS: tlsget [--insecure] HOST [PATH] [PORT]
+[[lean_exe]]
+name = "tlsget"
+root = "TlsGet"
+
+# Terminal web browser: lbrowse [--dump] [--insecure] [URL]
+[[lean_exe]]
+name = "lbrowse"
+root = "LBrowse"
