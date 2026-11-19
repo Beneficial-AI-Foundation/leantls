@@ -18,19 +18,6 @@ browser built on it (`LeanBrowse`). Both compile to native code through C. Tests
 
 ## Install
 
-### Prebuilt binaries (macOS, Apple Silicon)
-
-Each [release](https://github.com/Beneficial-AI-Foundation/leantls/releases) has `lbrowse` and
-`tlsget` for macOS arm64. They depend only on system libraries.
-
-```sh
-curl -LO https://github.com/Beneficial-AI-Foundation/leantls/releases/latest/download/leantls-macos-arm64.tar.gz
-tar xzf leantls-macos-arm64.tar.gz
-xattr -d com.apple.quarantine lbrowse tlsget 2>/dev/null   # the binaries are not notarized
-mkdir -p ~/.local/bin && mv lbrowse tlsget ~/.local/bin/   # make sure ~/.local/bin is on your PATH
-lbrowse https://example.com
-```
-
 ### From source (macOS or Linux)
 
 You need [elan](https://github.com/leanprover/elan), the Lean toolchain manager. The repository
@@ -42,7 +29,7 @@ curl https://elan.lean-lang.org/elan-init.sh -sSf | sh     # if you don't have e
 git clone https://github.com/Beneficial-AI-Foundation/leantls
 cd leantls
 lake build                     # checks every proof and spec, then builds both binaries (a few minutes)
-cp .lake/build/bin/lbrowse .lake/build/bin/tlsget ~/.local/bin/
+mkdir -p ~/.local/bin && cp .lake/build/bin/lbrowse .lake/build/bin/tlsget ~/.local/bin/   # ~/.local/bin must be on PATH
 ```
 
 `lake build` fails if any proof or spec fails, so a successful build means every theorem in
