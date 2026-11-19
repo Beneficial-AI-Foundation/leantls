@@ -1,29 +1,11 @@
 import LeanTLS.ChaCha20
+import LeanTLS.Poly1305
 /-!
 # Poly1305 and ChaCha20-Poly1305 AEAD (RFC 8439 §2.5–2.8)
 -/
 namespace LeanTLS
 
-namespace Poly1305
 
-def p : Nat := 2 ^ 130 - 5
-
-def clampR (r : Nat) : Nat := r &&& 0x0ffffffc0ffffffc0ffffffc0fffffff
-
-/-- One-time authenticator. `key` is 32 bytes `r ‖ s`. -/
-def mac (key msg : ByteArray) : ByteArray :=
-  let r := clampR (decodeLE (key.extract 0 16))
-  let s := decodeLE (key.extract 16 32)
-  let nblk := (msg.size + 15) / 16
-  let acc := (List.range nblk).foldl (fun acc i =>
-    let chunk := msg.extract (16 * i) (16 * i + 16)
-    let n := decodeLE chunk + 2 ^ (8 * chunk.size)
-    (acc + n) * r % p) 0
-  leN 16 (acc + s)
-
-@[simp] theorem mac_size (k m : ByteArray) : (mac k m).size = 16 := leN_size _ _
-
-end Poly1305
 
 namespace AEAD
 

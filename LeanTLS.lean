@@ -2,6 +2,7 @@ import LeanTLS.Bytes
 import LeanTLS.SHA256
 import LeanTLS.HKDF
 import LeanTLS.ChaCha20
+import LeanTLS.Poly1305
 import LeanTLS.AEAD
 import LeanTLS.X25519
 import LeanTLS.Record

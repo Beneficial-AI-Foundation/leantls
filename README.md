@@ -153,7 +153,7 @@ certificates.
 |---|---|---|
 | SHA-256, HMAC, HKDF | `LeanTLS/SHA256.lean`, `HKDF.lean` | FIPS 180-4, RFC 2104, RFC 5869 |
 | SHA-384, SHA-512 | `SHA512.lean` | FIPS 180-4 |
-| ChaCha20, Poly1305, AEAD | `ChaCha20.lean`, `AEAD.lean` | RFC 8439 |
+| ChaCha20, Poly1305, AEAD | `ChaCha20.lean`, `Poly1305.lean`, `AEAD.lean` | RFC 8439; Poly1305 runs a 26-bit-limb version proved equal to the spec (`macFast_eq`, compiled in via `@[csimp]`) |
 | X25519 | `X25519.lean` | RFC 7748, Montgomery ladder over `Nat` (GMP) |
 | P-256 / P-384 | `EC.lean` | ECDSA verification, P-256 ECDH |
 | RSA verification | `RSA.lean` | PKCS#1 v1.5 and PSS (RFC 8017) |
@@ -195,6 +195,8 @@ Python's `ssl` and Go's `crypto/tls`.
 - `AEAD.openMsg_sealMsg`: decrypting a sealed message returns the original.
   `AEAD.openMsg_some_tag`: `openMsg` accepts only when the tag matches.
 - `ChaCha20.encrypt_encrypt`: decryption inverts encryption.
+- `Poly1305.macFast_eq`: the fast 26-bit-limb Poly1305 equals the arbitrary-precision specification
+  for every key and message (about 50x faster; the compiler uses it in place of the spec).
 - `Record.openRecord_sealRecord`: a protected TLS record opens to the exact content and type.
 - `Record.parseInner_inner`: inner-plaintext decoding round-trips for any zero-padding length.
 - `Record.parseHs_hsMsg`: handshake framing round-trips and leaves trailing bytes untouched.
@@ -261,5 +263,5 @@ does not evaluate.
 - IP-address hosts.
 - Session resumption and client certificates.
 - Server: HelloRetryRequest, `TLS_AES_128_GCM_SHA256`, P-384 and Ed25519 certificate keys,
-  encrypted private keys. Throughput is that of pure-Lean ChaCha20 (a few MB/s).
+  encrypted private keys. Bulk throughput is bounded by pure-Lean ChaCha20 (about 45 MB/s).
 - Constant-time field arithmetic.
