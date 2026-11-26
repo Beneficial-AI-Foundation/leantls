@@ -147,6 +147,35 @@ nonces) or RSA keys (`rsa_pss_rsae_sha256`), from PEM (`PRIVATE KEY`, `EC PRIVAT
 certificate. The callback receives the SNI name, so different names can get different
 certificates.
 
+### `tlsserve`, a worked example
+
+[`TlsServe.lean`](TlsServe.lean) fills in the two pieces the sketch above leaves open — a
+`Transport` whose `recv` honours the timeout, and a listen loop — in about 70 lines. Build it
+and serve a self-signed certificate on the loopback interface:
+
+```sh
+lake build tlsserve
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+  -keyout key.pem -out cert.pem -days 30 -nodes \
+  -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost"
+.lake/build/bin/tlsserve cert.pem key.pem 8443 &
+```
+
+Then point clients at it. `-n N` serves `N` connections and exits, so scripted tests don't leave
+a server behind.
+
+```sh
+curl --cacert cert.pem https://localhost:8443/              # hello from LeanTLS
+curl --cacert cert.pem --curves P-256 https://localhost:8443/        # P-256 key share
+openssl s_client -connect 127.0.0.1:8443 -CAfile cert.pem -tls1_3    # Verify return code: 0 (ok)
+SSL_CERT_FILE=cert.pem .lake/build/bin/tlsget localhost / 8443       # LeanTLS on both ends
+openssl s_client -connect 127.0.0.1:8443 -tls1_2            # rejected: alert 70 protocol_version
+```
+
+`tlsserve` binds `127.0.0.1` only. It exists to exercise the server handshake against other
+implementations, not to serve traffic: this is research code and its arithmetic is not
+constant-time.
+
 ## What's implemented
 
 | Layer | Module | Notes |
