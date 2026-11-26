@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build and check proofs
+    strategy:
+      fail-fast: false
+      matrix:
+        # LeanTLS uses Std.Async sockets, DNS and the system certificate bundle,
+        # so it targets Linux and macOS (no Windows).
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # elan + the toolchain pinned in lean-toolchain, with the .lake cache.
+      # Building the two libraries checks every proof and spec (there is no separate
+      # runtime test suite: the tests are Lean theorems that `lake build` checks).
+      # Building the two executables (tlsget, lbrowse) compiles them to native code.
+      - name: Build the libraries, the proofs and the binaries
+        uses: leanprover/lean-action@v1
+        with:
+          auto-config: false
+          build: true
+          build-args: "LeanTLS LeanBrowse tlsget lbrowse"
+          use-github-cache: true
