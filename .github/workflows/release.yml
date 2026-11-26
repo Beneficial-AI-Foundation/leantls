@@ -1,0 +1,75 @@
+name: Release
+
+# Build installable binaries for each supported platform and attach them to the
+# GitHub Release. Triggered by pushing a version tag (e.g. `v0.2.0`), or manually.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # LeanTLS and LeanBrowse build on Linux and macOS only (Std.Async
+          # sockets, system certificate bundle). No Windows, no AES-GCM.
+          - os: ubuntu-latest
+            target: linux-x86_64
+          - os: macos-14          # Apple silicon
+            target: macos-arm64
+          - os: macos-13          # Intel
+            target: macos-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the tlsget and lbrowse binaries
+        uses: leanprover/lean-action@v1
+        with:
+          auto-config: false
+          build: true
+          build-args: "tlsget lbrowse"
+          use-github-cache: true
+
+      - name: Package
+        shell: bash
+        run: |
+          ver="${GITHUB_REF_NAME:-dev}"
+          name="leantls-${ver}-${{ matrix.target }}"
+          mkdir -p "dist/${name}"
+          cp .lake/build/bin/tlsget .lake/build/bin/lbrowse "dist/${name}/"
+          cp README.md LICENSE "dist/${name}/" 2>/dev/null || true
+          tar -C dist -czf "${name}.tar.gz" "${name}"
+          shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            leantls-*.tar.gz
+            leantls-*.tar.gz.sha256
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Attach binaries to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/leantls-*.tar.gz
+            dist/leantls-*.tar.gz.sha256
+          generate_release_notes: true
